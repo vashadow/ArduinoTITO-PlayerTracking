@@ -1,15 +1,124 @@
 # Arduino TITO and Player Tracking
 A homebrew slot machine TITO, player tracking and display project
-By Marc Davis (11/12/2021)
+By Marc Davis (01/17/2024)
 
   Project goals: To allow home slot machine owners the ability to add Ticket In/Ticket Out (TITO), 
   Remote Control, Monitoring and Player Tracking (Display/Keypad/Reader) to their SAS-Compatible 
   games using an Arduino Mega 2560 and reusing existing player tracking hardware
   
-  New in 20211031: The project now includes two new sketches for TITO-only hardware based on the Arduino UNO
-  and compatible with the BETTORSlots TITO and TITO Deluxe hardware. Please see the included documentation for
+  The project now includes sketches for TITO-only hardware based on the Arduino UNO and compatible 
+  with the BETTORSlots TITO and TITO Deluxe hardware. Please see the included documentation for
   more details.
 
+  January 17, 2024: Version 3.0 has been released!
+
+  Version 3.0 Build 20240123
+  - Fixes an issue where the getMacAddress function was returning identical MAC addresses; you
+    will need to manually set the MAC address in code before uploading sketch
+
+  Version 3.0 Build 20240117
+  - Consolidated the RFID and MAG sketches into one sketch to reduce what I need to maintain
+  - Adds 'Show Config' option to web UI and Game Manager to display the Arduino config.txt file
+  - Removes Tournament Mode; this was not very stable and not freqently used based on feedback. If
+    you want to continue using Tournament mode then stay on the version 2.0 sketch
+  - Updates to the Game Manager code; removal of Tournament Mode controls and code cleanup
+  - Updates to the Player Tracking Server
+  - The V2 sketches will remain for anyone needing that code; will eventually be retired. No additional
+    updates will be occurring to the V2 branch.
+  - Updated documentation
+
+  Version 2.0 Build 20240107
+
+  - Adds Jackpot Reset to the Deluxe sketch and webUI
+
+  Build 20230802
+
+  - Fixes an issue with the MEGA sketches where the SAS general poll was failing due to the wrong serial UART being updated
+  - Fixes an issue where under certain conditions the AutoAddCredits feature would generate a SAS read error
+  
+  Build 20230717
+
+  - Sorry! small bug in the RFID and MAG projects was keeping the TITO from working
+
+    
+  Arduino TITO Deluxe – Build 20230706
+
+  The Deluxe board is based on the Arduino Uno; which only has 2K of usable RAM for variables. The previous versions were not entirely stable due to the memory requirements of the Ethernet and SD libraries. The lack of 
+  garbage collection meant that repeated use of some variables would eventually deplete the available RAM and make the app crash. To fix this I have made the following changes to the project:
+
+  This version removes the use of the SD card; the few required configuration variables can be set in the sketch prior to loading it onto the Uno for the first time. These variables would rarely need to be changed and 
+  some can be altered during game-play by using the webUI
+
+  With the removal of the SD library we were able to remove the SPI and iniFile libraries – freeing up considerable space
+
+  IMPORTANT: You must remove the SD card from the device before use; with a card inserted the network will not start
+
+  Since the SD card is no longer present the web interface has been moved from the device to a hosted site. This was done for several reasons:
+
+      o	Performance
+      o	Memory limitations of the Uno hardware 
+      o	The need to free up code space for additional features
+
+  Even though the web interface is hosted on the Internet it does not have access to your network. You can only manage machines on the same local network as the device you are connecting from. If you are still not 
+  comfortable with that for any reason you can host the webpage yourself on a web server on your network – then simply change the ‘webUI’ property in the code to point to your server. The only file needed is the 
+  index.html file, which is included in the package.
+
+  To access the web interface you can either browse to the IP Address of your game or go to http://arduinotito.infinityfreeapp.com and enter the IP Address of the game in the space provided.
+
+  -	The code has been completely refactored and valuable memory-saving space has been recovered
+  -	You can now use the latest version of the Ethernet library; this has dramatically improved the reliability of the web server. (if you were using version 1.0.4 previously please upgrade your library)
+  - This version fixes an issue where the ticket info text was not being url-decoded before being sent to the game
+  -	This version adds the option to remotely reboot the Arduino from the webUI
+
+  Build 20230706 Updates
+
+  - Updates to the MEGA Sketches
+  - Updated SAS protocol implementation based on work done to optimize it for the Arduino Uno
+  - Fixes a bug which under certain conditions could cause the player comps could go negative
+
+  Build 20230328 Updates
+  
+  - Updates to the TITO and TITO Deluxe Sketches only
+  - Fixes a bug in the ChangeToCredits option in the WebUI - sorry!
+  
+  Build 20230325 Updates
+  
+  - Updates to the TITO and TITO Deluxe Sketches only
+  - Refactored code to remove usage of String variables and to free up additional memory on the Uno hardware
+  - Restores the config.txt file to the TITO Deluxe sketch for configuration of basic parameters
+  - Adds additional remote control options to the Deluxe sketch; including Bill Validator controls and Change to Credits
+  - The code optimizations in the Deluxe version will eventually be ported back into the main project
+  
+  Build 20221023 Updates
+  
+  THERE ARE CHANGES TO THE CONFIG.TXT FILE IN THIS BUILD! PLEASE UPDATE YOUR CONFIG.TXT FILE AS PER THE DOCUMENTATION
+  
+  - Adds support for ESP8266 WiFi via the Songhe Mega2560 + WiFi R3 board; other ESP8266 implementations may work as well
+  - Adds support for the Futaba NA202SD08FA display using the included FutabaVFD library
+  - Adds support for the XS Technologies PI70-120-TLA-DFR magnetic card reader using the included MagStripeSerial library
+  - Updates to the MagStripe library; if you are using a MagStripe reader you must update your library with the included newer version or the sketch will not compile
+  - Updated documentation with wiring for new supported hardware
+  - Github package cleaned up and reorganized
+  
+  Build 20220726 Updates
+  
+  - Updates to MEGA Sketches only
+  - Fixes an issue where comp credits could go negative
+    
+  Build 20220617 Updates
+  
+  - Updates to MEGA Sketches only
+  - Adds 'autoAddCredits' feature which will automatically add the number of credits specified in 'changeCredits'
+    to the game when the credit meter is less than or equal to the 'creditFloor' value in the config file. To prevent
+    excessive polling the check only runs after the attract message resets; so it could take up to 30 seconds for the
+    credits to be added to the game
+
+  Build 20220607 Updates
+  
+  - Updates to TITO and TITO Deluxe sketches only; due to memory issues in the Deluxe sketch I have had to remove
+    the config.txt file support; the settings need to be applied to the sketch directly before downloading to 
+    the UNO. This will increase stability of the Deluxe sketch.
+  - Minor updates to the SAS portion of the code
 
   Build 20211112 Updates
   
@@ -150,14 +259,14 @@ By Marc Davis (11/12/2021)
   - Minor html markup fixes to WebUI
   
   Hardware requirements: 
-    Arduino Mega 2560 R3; RFID RC 522 or compatible Magnetic Card Reader; W5100 Ethernet Shield; Serial Port board;
-    Compatible vacuum fluorescent display or LCD; if using a display other than the default LCD then
-    modifications will be required - see inline comments; Compatible keypad; if using a keypad other than
-    the default Bally 6x2/3x4 then modifications will be required - see inline comments; Modifications will 
-    be required if using another type of ethernet shield; Wifi shields are NOT recommended
+    Arduino Mega 2560 R3/Songhe Mega2560 + WiFi R3/Arduino Uno; RFID RC 522 or compatible Magnetic Card Reader; 
+    W5100 Ethernet Shield; Serial Port board; Compatible vacuum fluorescent display or LCD; if using a display
+    other than the default LCD then modifications will be required - see inline comments; Compatible keypad; if
+    using a keypad other than the default Bally 6x2/3x4 then modifications will be required - see inline comments; 
+    Modifications will be required if using another type of ethernet shield
 
   Software requirements:
-    If using an IEE or Noritake VFD You will need my modified version of the libraries included in the zip file
+    If using an IEE, Futaba or Noritake VFD You will need my modified version of the libraries included in the zip file
 
   Upgrading from earlier versions:
     Be sure to check the sample config.txt file in the zip file for new or changed parameters that may be required

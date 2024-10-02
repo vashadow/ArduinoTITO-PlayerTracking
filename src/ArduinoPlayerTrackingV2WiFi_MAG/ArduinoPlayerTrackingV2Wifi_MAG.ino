@@ -1,20 +1,17 @@
 /*
-  Arduino TITO and Player Tracking v2.0.20211112 RFID
-  by Marc R. Davis - Copyright (c) 2020-2021 All Rights Reserved
+  Arduino TITO and Player Tracking v2.0.20230802 WiFi + MAGSTRIPE
+  by Marc R. Davis - Copyright (c) 2020-2023 All Rights Reserved
   https://github.com/marcrdavis/ArduinoTITO-PlayerTracking
 
   Portions of the Arduino SAS protocol implementation by Ian Walker - Thank you!
   Additional testing and troubleshooting by NLG member Eddiiie - Thank you!
 
   Hardware requirements: 
-    Arduino Mega 2560 R3; RFID RC 522; W5100 Ethernet Shield; Serial Port Shield;
-    Compatible vacuum fluorescent display or LCD; if using a display other than the default LCD then
-    modifications will be required - see inline comments; Compatible keypad; if using a keypad other than
-    the default Bally 6x2/3x4 then modifications will be required - see inline comments; Modifications will 
-    be required if using another type of ethernet shield; Wifi shields are NOT recommended
-
-  Software requirements:
-    If using an IEE or Noritake VFD You will need my modified version of the libraries included in the zip file
+    Songhe Mega2560 + WiFi R3(or Mega2560+ESP8266 compatible module); Compatible Magstripe Reader; 
+    HiLetgo Stackable SD Card Shield; Serial Port; Compatible vacuum fluorescent display or LCD; if using a display 
+    other than the default LCD then modifications will be required - see inline comments; Compatible keypad; 
+    if using a keypad other than the default Bally 6x2/3x4 then modifications will be required - see inline 
+    comments and documentation
 
   Upgrading from earlier versions:
     Be sure to check the sample config.txt file in the zip file for new or changed parameters that may be required
@@ -46,6 +43,9 @@
 // IEE VFDs
 //#include <IeeFlipNoFrills.h>      // Enable for IEE VFDs; Disable other display includes
 
+// Futaba VFDs
+//#include <FutabaVFD.h>            // Enable for Futaba VFDs; Disable other display includes
+
 // LCDs
 #include <LiquidCrystal.h>          // Enable this for LCDs; Disable other display includes
 
@@ -54,15 +54,25 @@
 //#include <GU7000_Serial_Async.h>  // Enable this for GU-7000 Series VFDs; Disable other display includes
 //#include <Noritake_VFD_GU7000.h>  // Enable this for GU-7000 Series VFDs; Disable other display includes
 
+
+// ------------------------------------------------------------------------------------------------------------
+// Reader Includes - Enable ONLY ONE Group
+// ------------------------------------------------------------------------------------------------------------
+
+// UIC MSR240-02TMRNWWBR or compatible data/clock interface
+#include <MagStripe.h>
+
+// XS Technologies PI70-120-TLA-DFR or compatible Serial/TTL interface
+//#include <MagStripeSerial.h>
+
 // ------------------------------------------------------------------------------------------------------------
 // Required Libraries
 // ------------------------------------------------------------------------------------------------------------
 
 #include <IniFile.h>
 #include <SPI.h>
-#include <MFRC522.h>
 #include <SD.h>
-#include <Ethernet.h>
+#include <WiFiEspAT.h>
 #include <EEPROM.h>
 #include <Keypad.h>
 #include <TimeLib.h>
@@ -96,6 +106,7 @@ long playerGamesLost = 0;
 long playerTotalWon = 0;
 long tournamentScore = 0;
 long winMeterStart = 0;
+long creditFloor = 0;
 float playerComps = 0;
 float compPercentage = 0.01; // Set to zero to disable comps
 unsigned long startTime = 0;
@@ -108,6 +119,7 @@ bool localStorage = 1;
 bool onlyTITO = 0;
 bool changeToCredits = 0;
 bool useDHCP = 1;
+bool autoAddCredits = 0;
 bool sasOnline = false;
 bool sasError = false;
 bool inAdminMenu = false;
@@ -126,7 +138,7 @@ String creditsToAdd = "1000";
 String changeCredits = "100";
 String gameName = "Slot Machine";
 String stringData = "";
-String versionString = "2.0.20211031";
+String versionString = "2.0.20230802";
 
 char ipAddress[15];
 char casinoName[30] = "THE CASINO";  // actual text should not exceed the display width
@@ -138,6 +150,11 @@ char adminMenu[150] = "1=Add Credits  2=Sound On  3=Sound Off  4=Unlock Game  5=
 char playerMenu[55] = "1=Show Comp Balance  2=Use Comp Credits  0=Exit Menu";
 char scrollBuffer[296];
 char fixedBuffer[21];
+char ssid[32];  // your Wifi network SSID - must be set in the config.txt file
+char pass[32];  // your Wifi network password - must be set in the config.txt file
+
+static const byte DATA_BUFFER_LEN = 108;
+static char cardData[DATA_BUFFER_LEN];
 
 const char htmlHeader[] = "HTTP/1.1 200 OK\r\n"
                           "Content-Type: text/html\r\n"
@@ -151,7 +168,6 @@ const char textHeader[] = "HTTP/1.1 200 OK\r\n"
  
 const char htmlFooter[] = "</html>\r\n\r\n";
 
-byte mac[] = { 0x38, 0x24, 0x01, 0x00, 0x00, 0x00 }; // Will be set by init routine
 IPAddress ip(192, 168, 1, 254);  // Default address in case ipAddress not populated in config and DHCP unavailable
 IPAddress serverIP(192, 168, 1, 254); // The board should not point to itself as a web client
 
@@ -164,8 +180,6 @@ int LED = 13;
 byte SASAdr = 0x01;
 byte CRCH = 0x00;
 byte CRCL = 0x00;
-byte SASEvent [1];
-byte returnStatus[1];
 
 byte SVNS[2] = {SASAdr, 0x57};
 byte TP[2] = {SASAdr, 0x70};
@@ -205,6 +219,9 @@ byte TIM [11];
 // IEE VFDs; Pins 22, 23 = Control Pins; Pins 31-24 = data pins
 //IeeFlipNoFrills vfd(22, 23, 31, 30, 29, 28, 27, 26, 25, 24);
 
+// FutabaVFD VFDs; Pins 22 = Reset, 23 = Write; Pins 31-24 = data pins DB7-DB0
+//FutabaVFD vfd(22, 23, 31, 30, 29, 28, 27, 26, 25, 24);
+
 // LCDs (4 bit mode); Pins 22 = RS, 23 = Enable, 24 = DB7, 25 = DB6, 26 = DB5, 27 = DB4
 LiquidCrystal vfd(22, 23, 27, 26, 25, 24);
 
@@ -214,6 +231,16 @@ LiquidCrystal vfd(22, 23, 27, 26, 25, 24);
 // Noritake GU-7000 Series VFD; Pins 3 = SIN, 5 = BUSY, 7 = RESET; There is also code to enable in setup()
 // GU7000_Serial_Async interface(38400, 3, 5, 7); 
 // Noritake_VFD_GU7000 vfd;
+
+// ------------------------------------------------------------------------------------------------------------
+// Readers - Enable ONLY ONE GROUP
+// ------------------------------------------------------------------------------------------------------------
+
+// UIC MSR240-02TMRNWWBR or compatible data/clock interface
+MagStripe card;
+
+// XS Technologies PI70-120-TLA-DFR or compatible Serial/TTL interface
+//MagStripeSerial card;
 
 // ------------------------------------------------------------------------------------------------------------
 // Keypads - Enable ONLY ONE Group
@@ -255,13 +282,8 @@ byte pin_column[COLUMN_NUM] = {42, 43, 44, 45}; // Keypad Pins 5,6,7,8 */
 // Setup instances
 // ------------------------------------------------------------------------------------------------------------
 
-// Pins for RFID
-#define SS_PIN 53  
-#define RST_PIN 49 
-
-MFRC522 mfrc522(SS_PIN, RST_PIN);
 File sdFile;
-EthernetServer server(80);
+WiFiServer server(80);
 Keypad keypad = Keypad( makeKeymap(keys), pin_rows, pin_column, ROW_NUM, COLUMN_NUM );
 
 // ------------------------------------------------------------------------------------------------------------
@@ -322,18 +344,18 @@ void setup()
     vfd.interface(interface);
     vfd.isModelClass(7003); // Set based on model of display
     vfd.GU7000_reset();
-    vfd.GU7000_init(); */ 
+    vfd.GU7000_init();*/  
 
-    // Setup RFID
-    mfrc522.PCD_Init();    
+    // Setup Card Reader
+    card.begin(2);
   }
   else Serial.println(F("TITO Only Mode Enabled"));
   
   showMessageOnVFD("Initializing...", 0);
   delay(1000);
 
-  // Initialize Ethernet
-  initEthernet();
+  // Initialize WiFi
+  initWiFi();
 
   // Initialize HTTP Server
   server.begin();
@@ -350,16 +372,13 @@ void setup()
 
 void loop()
 {
-  // Check for DHCP renewal
-  checkEthernet();
-
   // Update player stats every 2 min if card is inserted
   if (millis() - lastUpdate >= 2*60*1000UL)
   {
    lastUpdate = millis();  //reset 
    updatePlayerStats();
   }
-  
+
   resetScroll=false;
 
   if (onlyTITO)
@@ -396,12 +415,12 @@ void loop()
       {
         // Admin Menu Options
         if (key == '1') adminAddCredits();
-        if (key == '2') unMute();
-        if (key == '3') mute();
-        if (key == '4') unlockMachine();
-        if (key == '5') lockMachine();
-        if (key == '6') enableBV();
-        if (key == '7') disableBV();
+        if (key == '2') slotCommand(UMUTE,4,"Sound On");
+        if (key == '3') slotCommand(MUTE,4,"Sound Off");
+        if (key == '4') slotCommand(ULOCK,4,"Game Unlocked");
+        if (key == '5') slotCommand(LOCK,4,"Game Locked");
+        if (key == '6') slotCommand(EBILL,4,"BV Enabled");
+        if (key == '7') slotCommand(DBILL,4,"BV Disabled");
         if (key == '8') changeButtonToCredits(true);
         if (key == '9') changeButtonToCredits(false);
         if (key == '0') { 
@@ -450,7 +469,7 @@ void loop()
           waitingForStart=false;
           timeExpired=false;
           winMeterStart = pollMeters(mTotWon);
-          unlockMachine();
+          slotCommand(ULOCK,4,"Game Unlocked");
           vfd.clear();
           showMessageOnVFD("Score: 0",0);
         }
@@ -469,7 +488,7 @@ void loop()
         if (endTime - now() <= 0) {
           // End Tournament play
           timeExpired=true;
-          lockMachine();
+          slotCommand(LOCK,4,"Game Locked");
           vfd.clear();
           showMessageOnVFD("TOURNAMENT OVER", 0);
           showMessageOnVFD("PLEASE WAIT", 1);
@@ -486,6 +505,18 @@ void loop()
       }      
     }
   }
+
+  // If autoAddCredits is enabled then check the credit meter and add credits if necessary
+  if (autoAddCredits)
+  {
+    Credits = pollMeters(mCredits);
+    if (Credits != 0 && Credits < creditFloor) 
+    {
+      Serial.println(F("Low credit threshold reached!"));
+      addCredits(changeCredits);      
+    }
+  }
+
 }
 
 // ------------------------------------------------------------------------------------------------------------
@@ -497,7 +528,9 @@ void showAvailComps()
   char b[20];
   int creds = 0;
   
-  if (readGameData()) creds = playerComps + ((totalIn - tempTotalIn) * compPercentage);
+  if (haveStartingStats && readGameData()) {
+    creds = playerComps + abs((totalIn - tempTotalIn) * compPercentage);
+  }
   else creds = playerComps;
 
   stringData = String(creds) + " credits";
@@ -513,17 +546,18 @@ void useCompCredits()
 {
   int creds = 0;
   
-  if (readGameData()) playerComps += ((totalIn - tempTotalIn) * compPercentage);
+  if (haveStartingStats && readGameData()) playerComps += abs((totalIn - tempTotalIn) * compPercentage);
   creds = playerComps;
     
-  if (creds <1){
+  if (creds < 1){
     showMessageOnVFD("NO COMPS AVAIL",0);
     delay(2000);
   }
   else {
    if (addCredits(String(creds)))
    {
-      playerComps=playerComps-creds;    
+      // Reset comps to zero
+      playerComps=0;    
   
       // Call this now to write back the changed playerComps; the other values will be updated when the card is removed
       if (localStorage) writePlayerDataToSD(lastCardID, cardType, cardHolder, playerTotalGames, playerGamesWon, playerGamesLost, playerTotalWon, playerComps);
@@ -635,9 +669,9 @@ bool startTournamentMode(String credits)
   waitingForStart=true;
   addCredits(credits);
   delay(1000);
-  disableBV();
+  slotCommand(DBILL,4,"BV Disabled");
   delay(500);
-  lockMachine();
+  slotCommand(LOCK,4,"Game Locked");
   tournamentScore = 0; 
     
   Serial.println(F("Tournament Started"));
@@ -656,7 +690,7 @@ void exitTournamentMode()
   totalWon = pollMeters(mTotWon);
   if (totalWon>0) tournamentScore = totalWon - winMeterStart;
           
-  enableBV();
+  slotCommand(EBILL,4,"BV Enabled");
   inTournament=false;
   waitingForStart=false;
   startTime=0;
@@ -702,7 +736,25 @@ void readConfig()
   if (ini.getValue(NULL, "changeCredits", buffer, 256)) changeCredits = String(buffer);
   if (ini.getValue(NULL, "gameName", buffer, 256)) gameName = String(buffer);
   if (ini.getValue(NULL, "compPercentage", buffer, 256)) compPercentage = atof(buffer);
+  if (ini.getValue(NULL, "autoAddCredits", buffer, 256)) autoAddCredits =  atoi(buffer);
+  if (ini.getValue(NULL, "creditFloor", buffer, 256)) creditFloor = atol(buffer);
+  if (ini.getValue(NULL, "wifiSSID", buffer, 256)) strcpy(ssid, buffer);
+  if (ini.getValue(NULL, "wifiPassword", buffer, 256)) strcpy(pass, buffer);
 
+  if (creditFloor == 0 && autoAddCredits == 1)
+  {
+    // creditFloor cannot be zero or ticket cashout will not work properly
+    autoAddCredits = 0;
+    Serial.println(F("Unable to enable autoAddCredits because creditFloor is set to 0"));
+  }
+
+    if (changeCredits == 0 && autoAddCredits == 1)
+  {
+    // changeCredits cannot be zero or ticket cashout will not work properly
+    autoAddCredits = 0;
+    Serial.println(F("Unable to enable autoAddCredits because changeCredits is set to 0"));
+  }
+  
   if (ini.getValue(NULL, "ipAddress", buffer, 256))
   {
     strcpy(ipAddress, buffer);
@@ -757,6 +809,7 @@ String readPlayerDataFromSD(String cid, bool remote)
       if (ini.getValue(NULL, "playerComps", buffer, 30)) playerComps = atof(buffer);
      
       if (cardHolder == "") cardHolder = "Player";
+      if (playerComps < 0) playerComps = 0;
     }
     ini.close();
   }
@@ -768,7 +821,7 @@ String readPlayerDataFromSD(String cid, bool remote)
 
 void writePlayerDataToServer(String cid, int ct, String cn, long pg, long pw, long pl, long ptw, float pc)
 {
-  EthernetClient client;
+  WiFiClient client;
   String sIP = String(serverIP[0]) + '.' + String(serverIP[1]) + '.' + String(serverIP[2]) + '.' + String(serverIP[3]);
   cn.replace(" ", "+");
   String playerData = cn + "|" + String(ct) + "|" + String(pg) + "|" + String(pw) + "|" + String(pl) + "|" + String(ptw) + "|" + String(pc);
@@ -798,7 +851,7 @@ void writePlayerDataToServer(String cid, int ct, String cn, long pg, long pw, lo
 
 void readPlayerDataFromServer(String cid)
 {
-  EthernetClient client;
+  WiFiClient client;
   String sIP = String(serverIP[0]) + '.' + String(serverIP[1]) + '.' + String(serverIP[2]) + '.' + String(serverIP[3]);
   cardType = 0;
   cardHolder = "";
@@ -921,74 +974,49 @@ void initSDCard()
 // Network Functions
 // ------------------------------------------------------------------------------------------------------------
 
-// Initialize the Ethernet Shield
+// Initialize the ESP8266 board
 
-void initEthernet()
+void initWiFi()
 {
-  // Generate unique MAC Address
-  getMacAddress(mac);
-
-  Ethernet.init(10);  
-  
-  // Start the Ethernet connection and the server
-  if (useDHCP) Ethernet.begin(mac);
-  else Ethernet.begin(mac, ip);
-
-  // Check for Ethernet hardware present
-  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-    Serial.println(F("Ethernet shield was not found. Remote Access will not be available."));
-
+  if (strlen(ssid) == 0 | strlen(pass) == 0) {
+    Serial.println("ERROR: SSID or Password not set in configuration file!");
     showMessageOnVFD("No Network", 0);
     delay(2000);
     return;
   }
   
-  Serial.print(F("IP address: "));
-  Serial.println(Ethernet.localIP());
-  ip = Ethernet.localIP();
-  ipStr = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);
+  Serial.print(F("Setting up connection to WiFi: "));
+  Serial.println(ssid);
+  Serial3.begin(115200);
+  WiFi.init(Serial3);
 
-  showMessageOnVFD("Net Connected", 0);
-  showMessageOnVFD(ipStr.c_str(), 1);
-  delay(2000);
-}
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("Communication with WiFi module failed!");
+    showMessageOnVFD("No Network", 0);
+    delay(2000);
+    return;
+  }
 
-// Check for DHCP renewals
+  // Login to the WiFi
+  if (!useDHCP) WiFi.config(ip);
+  int status = WiFi.begin(ssid, pass);
 
-void checkEthernet()
-{
-  if (!useDHCP) return;
-
-  switch (Ethernet.maintain()) {
-    case 1:
-      // Renewed fail
-      Serial.println(F("Error: DHCP renewal failed"));
-      break;
-
-    case 2:
-      // Renewed success
-      Serial.println(F("DHCP Renewed successfully"));
-      Serial.print(F("IP address: ")); Serial.println(Ethernet.localIP());
-      ip = Ethernet.localIP();
-      ipStr = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);
-      break;
-
-    case 3:
-      // Rebind fail
-      Serial.println(F("Error: Ethernet rebind failed"));
-      break;
-
-    case 4:
-      // Rebind success
-      Serial.println(F("Ethernet rebind successful"));
-      Serial.print(F("IP address: ")); Serial.println(Ethernet.localIP());
-      ip = Ethernet.localIP();
-      ipStr = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);
-      break;
-
-    default:
-      // Nothing happened
-      break;
+  if (status == WL_CONNECTED) {
+    Serial.println(F("Connected to WiFi network."));
+    Serial.print(F("IP address: "));
+    Serial.println(WiFi.localIP());
+    ip = WiFi.localIP();
+    ipStr = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);
+  
+    showMessageOnVFD("Net Connected", 0);
+    showMessageOnVFD(ipStr.c_str(), 1);
+    delay(2000);
+  } else {
+    WiFi.disconnect(); // remove the WiFi connection
+    Serial.println(F("Connection to WiFi network failed. Please check the SSID name and Password."));
+    showMessageOnVFD("No Network", 0);
+    delay(2000);
+    return;
   }
 }
 
@@ -1000,21 +1028,19 @@ void checkEthernet()
 
 bool checkForPlayerCard()
 {
-  if (mfrc522.PICC_IsNewCardPresent())
+  if (cardID == "" && card.available())
   {
-    if (mfrc522.PICC_ReadCardSerial())
+    // Card insertion begun
+    Serial.println(F("Reading card"));
+    short chars = card.read(cardData, DATA_BUFFER_LEN);
+    
+    if (chars > 0)
     {
       // Card present - identify
-      cardID = "";
-
-      for (byte i = 0; i < mfrc522.uid.size; i++)
-      {
-        cardID.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
-        cardID.concat(String(mfrc522.uid.uidByte[i], HEX));
-      }
-
+      cardID = String(cardData);
+      cardID.trim();
+      if (cardID.length()>8) cardID = cardID.substring(cardID.length()-8,cardID.length());
       cardID.toUpperCase();
-      cardID = cardID.substring(1);
       cardID.replace(" ", "");
 
       if (cardID != lastCardID)
@@ -1090,45 +1116,47 @@ bool checkForPlayerCard()
     }
     else
     {
+      // Bad Card Swipe
+      Serial.println(F("Unable to read card"));
+      showMessageOnVFD("CARD READ ERROR", 0);
+      delay(2000);
+      showMessageOnVFD(casinoName, 0);
       return false;
     }
   }
   else
   {
-    bool current, previous;
-    if (lastCardID != "")
+    if (lastCardID != "" && !card.available2())
     {
-      previous = true;
-      current = !mfrc522.PICC_IsNewCardPresent();
+      // Card Removed
+      setupAttractMessage();
+      showMessageOnVFD("CARD REMOVED", 0);
+      Serial.println(F("Card Removed"));
 
-      if (current && previous)
-      {
-        // Card Removed
-        setupAttractMessage();
-        showMessageOnVFD("CARD REMOVED", 0);
-        Serial.println(F("Card Removed"));
-
-        if (cardType == 2) {
-          exitMenu();
-          clearStats();
-          return true;         
-        }
-
-        updatePlayerStats();
-
-        if (inTournament)
-        {
-          Serial.println(F("Card removed while in Tournament Play. Player is no longer in game."));
-          showMessageOnVFD("WAIT FOR HOST", 0);
-          lockMachine();
-        }
-        
-        // Clear variables
+      if (cardType == 2) {
+        exitMenu();
         clearStats();
-
-        delay(2000);
-        return true;
+        return true;         
       }
+
+      updatePlayerStats();
+
+      if (inTournament)
+      {
+        Serial.println(F("Card removed while in Tournament Play. Player is no longer in game."));
+        showMessageOnVFD("WAIT FOR HOST", 0);
+        slotCommand(LOCK,4,"Game Locked");
+      }
+      
+      // Clear variables
+      clearStats();
+
+      delay(2000);
+
+      // Flush the buffer
+      card.flush();
+      
+      return true;
     }
   }
 
@@ -1150,7 +1178,7 @@ void updatePlayerStats()
       playerGamesWon += (gamesWon - tempGamesWon);
       playerGamesLost += (gamesLost - tempGamesLost);
       playerTotalWon += (totalWon - tempTotalWon);
-      playerComps += ((totalIn - tempTotalIn) * compPercentage);
+      playerComps += abs((totalIn - tempTotalIn) * compPercentage);
   
       // Update temp values
       tempTotalIn = totalIn;
@@ -1167,6 +1195,7 @@ void updatePlayerStats()
       else
       {
         Serial.println(F("Updating player stats"));
+        if (playerComps < 0) playerComps = 0;
         if (localStorage) writePlayerDataToSD(lastCardID, cardType, cardHolder, playerTotalGames, playerGamesWon, playerGamesLost, playerTotalWon, playerComps);
         else writePlayerDataToServer(lastCardID, cardType, cardHolder, playerTotalGames, playerGamesWon, playerGamesLost, playerTotalWon, playerComps);
       }
@@ -1250,7 +1279,6 @@ bool addCredits(String credits)
 bool readGameData()
 {
   Serial.println(F("Reading meters from game"));
-  sasError = false;
 
   Credits = pollMeters(mCredits);
   delay(100);
@@ -1324,7 +1352,6 @@ bool setupPlayerMessage(bool skipBuffer)
   stringData = String(scrollBuffer);
   stringData.replace("[CARDHOLDER]", cardHolder);
   stringData.replace("[CASINONAME]", casinoName);  
-  int creds = playerComps;
   if (playerComps>1 && !skipBuffer) stringData += "You have Comp Credits available! Press [ENT] to access Player Menu.                    ";
   stringData.toCharArray(scrollBuffer, stringData.length() + 1); 
   resetScroll=true;
@@ -1401,24 +1428,6 @@ String urlDecode(String str)
   return decodedString;
 }
 
-// Get a MAC Address for ethernet
-
-void getMacAddress(byte* macAddr) {
-  int eepromOffset = 128;
-  int b = 0;
-  for (int c = 0; c < 6; c++) {
-    b = 0;
-    if (macAddr[c] == 0) {
-      b = EEPROM.read(eepromOffset + c);
-      if (b == 0 || b == 255) {
-        b = random(0, 255);
-        EEPROM.write(eepromOffset + c, b);
-      }
-      macAddr[c] = b;
-    }
-  }
-}
-
 // Set Time
 
 void processSyncMessage(unsigned long pctime)
@@ -1445,9 +1454,9 @@ time_t requestSync()
 
 void htmlPoll()
 {
-  EthernetClient client = server.available();
+  WiFiClient client = server.available();
   if (!client) return;
-  client.setConnectionTimeout(1000);
+  client.setTimeout(1000);
   
   if (client.connected()) // If client is present and connected
   {
@@ -1661,12 +1670,12 @@ void htmlPoll()
         reqResult = writePlayerDataToSD(cid, getValue(playerData, '|', 1).toInt(), urlDecode(getValue(playerData, '|', 0)), getValue(playerData, '|', 2).toInt(), getValue(playerData, '|', 3).toInt(), getValue(playerData, '|', 4).toInt(), getValue(playerData, '|', 5).toInt(), getValue(playerData, '|', 6).toInt());
       }
 
-      if (command == "mo") reqResult=mute();
-      if (command == "mt") reqResult=unMute();
-      if (command == "lk") reqResult=lockMachine();
-      if (command == "uk") reqResult=unlockMachine();
-      if (command == "eb") reqResult=enableBV();
-      if (command == "db") reqResult=disableBV();
+      if (command == "mo") reqResult=slotCommand(MUTE,4,"Sound Off");
+      if (command == "mt") reqResult=slotCommand(UMUTE,4,"Sound On");
+      if (command == "lk") reqResult=slotCommand(LOCK,4,"Game Locked");
+      if (command == "uk") reqResult=slotCommand(ULOCK,4,"Game Unlocked");
+      if (command == "eb") reqResult=slotCommand(EBILL,4,"BV Enabled");
+      if (command == "db") reqResult=slotCommand(DBILL,4,"BV Disabled");
       if (command == "rh") reqResult=resetHandpay();
       if (command == "ec") reqResult=changeButtonToCredits(true);
       if (command == "dc") reqResult=changeButtonToCredits(false);
@@ -1727,7 +1736,7 @@ void htmlPoll()
         String customMsg = "                    " + getValue(getValue(urlDecode(querystring), '&', 1), '=', 1);
         customMsg.toCharArray(scrollBuffer, customMsg.length() + 1);
         reqResult=setupPlayerMessage(true);
-        reqResult = unlockMachine();
+        reqResult = slotCommand(ULOCK,4,"Game Unlocked");
       }
 
       if (command == "st")  // Start Tournament Mode
@@ -1790,8 +1799,8 @@ void htmlPoll()
       if (sdFile)
       {
         client.print(htmlHeader);
-        client.print(F("<head><meta name='viewport' content='initial-scale=1.0'>"));
-        client.print(F("<style>body {font-family: Tahoma;} button {font-family: inherit; font-size: 1.0em; background-color: #008CBA; color: white; border: none; text-decoration: none; border-radius: 4px; transition-duration: 0.4s;} button:hover { background-color: white; color: black; border: 2px solid #008CBA; } td { padding-left: 7.5px; padding-right: 7.5px; } </style></head><body>"));
+        client.print(F("<head><meta name='viewport' content='initial-scale=1.0'><title>Arduino TITO and Player Tracking</title>"));
+        client.print(F("<style>body {font-family: Tahoma;} button {font-family: inherit; font-size: 1.0em; background-color: #008CBA; color: white; border: none; text-decoration: none; border-radius: 4px; transition-duration: 0.4s;} button:hover { background-color: white; color: black; border: 2px solid #008CBA; } td { margin-left: 7.5px; margin-right: 7.5px; } </style></head><body>"));
         client.print(F("<div style='max-width: 100%; margin: auto; text-align:center;'>"));
         client.print(F("<h2>Arduino TITO and Player Tracking</h2>"));
         client.print("Game Name: <b>" + gameName + "</b>&nbsp;&nbsp;&nbsp;");
@@ -1848,7 +1857,7 @@ void htmlPoll()
 
 void generalPoll()
 {
-  SASEvent[0] = 0x00;
+  byte eventCode = 0;
 
   UCSR1B = 0b10011101;
   Serial1.write(0x80);
@@ -1856,38 +1865,76 @@ void generalPoll()
   Serial1.write(0x81);
   UCSR1B = 0b10011100;
 
-  delay(10);  // Found to be necessary on some machines to wait for data on the serial bus
+  delay(10);  // Wait for data on the serial bus
   if (Serial1.available() > 0) {
-    Serial1.readBytes(SASEvent, sizeof(SASEvent));
-    if (sasOnline==false) sasOnline=true;
+    eventCode = Serial1.read();
+     if (sasOnline==false) sasOnline=true;
   }
 
-  if (SASEvent[0] != 0x1F && SASEvent[0] != 0x00 && SASEvent[0] != 0x01 && SASEvent[0] != 0x80 && SASEvent[0] != 0x81 && SASEvent[0] != 0x7C) {
-    Serial.print(F("SAS Event Received: ")); Serial.print(SASEvent[0], HEX); Serial.print(F(" "));
+  if (eventCode != 0x1F && eventCode != 0x00 && eventCode != 0x01 && eventCode != 0x80 && eventCode != 0x81 && eventCode != 0x7C) {
+    Serial.print(F("SAS Event Received: ")); Serial.print(eventCode, HEX); Serial.print(F(" "));
 
-    if (SASEvent[0] == 0x11) Serial.println(F("Game door opened"));
-    if (SASEvent[0] == 0x12) Serial.println(F("Game door closed"));
-    if (SASEvent[0] == 0x17) Serial.println(F("AC power was applied to gaming machine"));
-    if (SASEvent[0] == 0x18) Serial.println(F("AC power was lost from gaming machine"));
-    if (SASEvent[0] == 0x19) Serial.println(F("Cashbox door was opened"));
-    if (SASEvent[0] == 0x1A) Serial.println(F("Cashbox door was closed"));        
-    if (SASEvent[0] == 0x66) Serial.println(F("Cash out button pressed"));
-    if (SASEvent[0] == 0x51) Serial.println(F("Handpay is pending"));
-    if (SASEvent[0] == 0x52) Serial.println(F("Handpay was reset"));
-    if (SASEvent[0] == 0x2B) Serial.println(F("Bill rejected"));
-    if (SASEvent[0] == 0x7E) Serial.println(F("Game started"));
-    if (SASEvent[0] == 0x7F) Serial.println(F("Game ended"));
-
-    // Process/log these events
-    if (SASEvent[0] == 0x71 & changeToCredits) addCredits(changeCredits); // To enable 'Change button' credits
-    if (SASEvent[0] == 0x72 & changeToCredits) addCredits(changeCredits); // To enable 'Change button' credits
-    if (SASEvent[0] == 0x51) getHandpayInfo();
-    if (SASEvent[0] == 0x57) SystemValidation();
-    if (SASEvent[0] == 0x3D) CashOutState();
-    if (SASEvent[0] == 0x67) RedeemTicket();
-    if (SASEvent[0] == 0x68) ConfirmRedeem();
+    switch (eventCode) {
+      case 0x11:
+        Serial.println(F("Game door opened"));
+        break;
+      case 0x12:
+        Serial.println(F("Game door closed"));
+        break;
+      case 0x17:
+        Serial.println(F("AC power was applied to gaming machine"));
+        break;
+      case 0x18:
+        Serial.println(F("AC power was lost from gaming machine"));
+        break;
+      case 0x19:
+        Serial.println(F("Cashbox door was opened"));
+        break;
+      case 0x1A:
+        Serial.println(F("Cashbox door was closed"));
+        break;
+      case 0x66:
+        Serial.println(F("Cash out button pressed"));
+        break;
+      case 0x51:
+        Serial.println(F("Handpay is pending"));
+        getHandpayInfo();
+        break;
+      case 0x52:
+        Serial.println(F("Handpay was reset"));
+        break;
+      case 0x2B:
+        Serial.println(F("Bill rejected"));
+        break;
+      case 0x7E:
+        Serial.println(F("Game started"));
+        break;
+      case 0x7F:
+        Serial.println(F("Game ended"));
+        break;
+      case 0x71:
+      case 0x72:
+        if (changeToCredits) {
+          addCredits(changeCredits);  // To enable 'Change button' credits
+        }
+        break;
+      case 0x57:
+        SystemValidation();
+        break;
+      case 0x3D:
+        CashOutState();
+        break;
+      case 0x67:
+        RedeemTicket();
+        break;
+      case 0x68:
+        ConfirmRedeem();
+        break;
+      default:
+        break;
+    }
     Serial.println(F(""));
-  } 
+  }
 }
 
 int dec2bcd(byte val)
@@ -1906,7 +1953,8 @@ void waitForResponse(byte & waitfor, byte * ret, int sz)
 {
   byte responseBytes[sz - 2];
   int wait = 0;
-
+  sasError = false;
+  
   while (Serial1.read() != waitfor && wait < 3000) {
     delay(1);
     wait += 1;
@@ -1966,42 +2014,10 @@ long pollMeters(byte * meter)
   return sMeter.toInt();
 }
 
-bool lockMachine()
+bool slotCommand(byte cmd[], int len, const char msg[])
 {
-  SendTypeS(LOCK, sizeof(LOCK));
-  isLocked=true;
-  return waitForACK(SASAdr,"Game Locked");
-}
-
-bool unlockMachine()
-{
-  SendTypeS(ULOCK, sizeof(LOCK));
-  isLocked=false;
-  return waitForACK(SASAdr,"Game Unlocked");
-}
-
-bool mute()
-{
-  SendTypeS(MUTE, sizeof(MUTE));
-  return waitForACK(SASAdr,"Sound Off");
-}
-
-bool unMute()
-{
-  SendTypeS(UMUTE, sizeof(UMUTE));
-  return waitForACK(SASAdr,"Sound On");
-}
-
-bool disableBV()
-{
-  SendTypeS(DBILL, sizeof(DBILL));
-  return waitForACK(SASAdr,"BV Disabled");
-}
-
-bool enableBV()
-{
-  SendTypeS(EBILL, sizeof(EBILL));
-  return waitForACK(SASAdr,"BV Enabled");
+  SendTypeS(cmd, len);
+  return waitForACK(SASAdr, msg);
 }
 
 bool changeButtonToCredits(bool e)
@@ -2040,7 +2056,6 @@ void SystemValidation()
 
   for (int x = 0; x < 2; x++) {
     SendTypeR(SVNS, sizeof(SVNS));
-    sasError = false;
     waitForResponse(SVNS[1], COT, sizeof(COT));
     if (!sasError) break;
   }
@@ -2158,7 +2173,6 @@ void RedeemTicket()
   for (int x = 0; x < 2; x++) {
     SendTypeR(TP, sizeof(TP));
     Serial.println(F("Waiting for ticket data"));
-    sasError = false;
     waitForResponse(TP[1], TEQ, sizeof(TEQ));
     if (!sasError) break;
   }
@@ -2189,7 +2203,6 @@ void RedeemTicket()
   
     Serial.println(F("Authorizing ticket"));
     SendTypeS(TRS, sizeof(TRS));  
-    sasError = false;
     waitForResponse(TRS[1], TEQ, sizeof(TEQ));
   
     // Report on common responses

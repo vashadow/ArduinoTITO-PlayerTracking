@@ -1,13 +1,13 @@
 /*
-  Arduino TITO v2.0.20230802T
-  by Marc R. Davis - Copyright (c) 2020-2023 All Rights Reserved
+  Arduino TITO v3.0.20240117T
+  by Marc R. Davis - Copyright (c) 2020-2024 All Rights Reserved
   https://github.com/marcrdavis/ArduinoTITO-PlayerTracking
 
   Portions of the Arduino SAS protocol implementation by Ian Walker - Thank you!
   Additional testing and troubleshooting by NLG member Eddiiie - Thank you!
 
   Hardware requirements: 
-    Arduino Uno; Serial Port
+  Arduino Uno; Serial Port
 
   For TITO setup please follow the included documentation
 
@@ -28,9 +28,8 @@
 // Core Variables
 // ------------------------------------------------------------------------------------------------------------
 
-bool changeToCredits = 0; // UPDATE BEFORE COMPILING - Set to 1 to enable Change to Credits
 bool sasError = false;
-
+bool changeToCredits = 0; // UPDATE BEFORE COMPILING - Set to 1 to enable Change to Credits
 char* changeCredits = "500"; // UPDATE BEFORE COMPILING - Set the number of credits to add on each push of the change/service button
 
 // ------------------------------------------------------------------------------------------------------------
@@ -137,7 +136,7 @@ void generalPoll()
     case 0x71:
     case 0x72:
       if (changeToCredits) {
-        addCredits(changeCredits);  // To enable 'Change button' credits
+        addCredits(changeCredits);
       }
       break;
     case 0x57:

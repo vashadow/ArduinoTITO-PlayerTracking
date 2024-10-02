@@ -1,5 +1,5 @@
 /*
-  Arduino TITO Deluxe v2.0.20240107D
+  Arduino TITO Deluxe v3.0.20240117D
   by Marc R. Davis - Copyright (c) 2020-2024 All Rights Reserved
   https://github.com/marcrdavis/ArduinoTITO-PlayerTracking
 
@@ -7,15 +7,15 @@
   Additional testing and troubleshooting by NLG member Eddiiie - Thank you!
 
   Hardware requirements: 
-    Arduino Uno; W5100 Ethernet Shield; Serial Port
+  Arduino Uno; W5100 Ethernet Shield; Serial Port
 
-    ** WARNING: Do not insert an SD card; it will cause problems with the network **
+  ** WARNING: Do not insert an SD card; it will cause problems with the network **
 
   For TITO setup please follow the included documentation
 
   Note: Remote access has been made compatible with BETTORSlots TITO apps for IOS/Android; BETTORSlots is
-        not affiliated with this project and does not support or endorse using their apps for this purpose;
-        This project does not use BETTORSlots code.
+  not affiliated with this project and does not support or endorse using their apps for this purpose;
+  This project does not use BETTORSlots code.
 
   This software is licensed to you under The Creative Commons Attribution-NonCommercial-NoDerivatives 4.0
   International license (https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode).
@@ -152,7 +152,7 @@ void initEthernet()
   else Ethernet.begin(mac, ip);
   
   ip = Ethernet.localIP();
-  Serial.println(ip);
+  Serial.println(ip); // show ip on serial monitor before game init
   delay(1000);
 }
 
@@ -405,7 +405,7 @@ void generalPoll()
     case 0x71:
     case 0x72:
       if (changeToCredits) {
-        addCredits(changeCredits);  // To enable 'Change button' credits
+        addCredits(changeCredits);
       }
       break;
     case 0x57:
